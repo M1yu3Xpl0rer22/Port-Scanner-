@@ -95,9 +95,11 @@ def run_scan(host, start_port, end_port, timeout):
 def get_results():
     return jsonify(list(scan_results.values()))
 
+from waitress import serve
+
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    serve(app, host='0.0.0.0', port=10000)
