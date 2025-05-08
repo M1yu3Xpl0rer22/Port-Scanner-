@@ -5,6 +5,8 @@ import time
 import os
 from flask_cors import CORS
 
+
+
 app = Flask(__name__, static_folder='.')
 CORS(app)  # Enable CORS for all routes
 
