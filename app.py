@@ -3,13 +3,18 @@ import socket
 import threading
 import time
 import os
+import logging
 from flask_cors import CORS
 from waitress import serve
 
+# Initialize Flask app
 app = Flask(__name__, static_folder='.')
-CORS(app)  # Enable CORS for all routes
+CORS(app)  # Enable CORS
+logging.basicConfig(level=logging.INFO)
 
+# Global scan results store with thread lock
 scan_results = {}
+results_lock = threading.Lock()
 
 @app.route('/scan', methods=['POST'])
 def scan_ports():
@@ -22,12 +27,16 @@ def scan_ports():
         return jsonify({'error': 'Host is required'}), 400
 
     try:
+        # Validate host and ports
         socket.gethostbyname(host)
         start_port, end_port = map(int, port_range.split('-'))
         if start_port < 1 or end_port > 65535 or start_port > end_port:
             return jsonify({'error': 'Invalid port range'}), 400
 
+        # Unique scan key
         scan_key = f"{host}_{int(time.time())}"
+
+        # Start background scan
         scan_thread = threading.Thread(target=run_scan, args=(host, start_port, end_port, float(timeout), scan_key))
         scan_thread.start()
 
@@ -41,13 +50,15 @@ def scan_ports():
 
 def run_scan(host, start_port, end_port, timeout, scan_key):
     results = []
-    scan_results[scan_key] = {
-        'host': host,
-        'timestamp': int(time.time()),
-        'status': 'scanning',
-        'results': results
-    }
-    
+
+    with results_lock:
+        scan_results[scan_key] = {
+            'host': host,
+            'timestamp': int(time.time()),
+            'status': 'scanning',
+            'results': results
+        }
+
     for port in range(start_port, end_port + 1):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -59,32 +70,32 @@ def run_scan(host, start_port, end_port, timeout, scan_key):
                     service = socket.getservbyport(port)
                 except:
                     service = "unknown"
-
                 results.append({'port': port, 'status': 'open', 'service': service})
             s.close()
         except Exception as e:
-            print(f"Error scanning port {port}: {e}")
-    
-    # Update status to completed
-    scan_results[scan_key]['status'] = 'completed'
+            logging.error(f"Error scanning port {port}: {e}")
 
-    # Clean up old scan results
-    keys = list(scan_results.keys())
-    if len(keys) > 10:
-        oldest_keys = sorted(keys, key=lambda k: scan_results[k]['timestamp'])[:len(keys)-10]
-        for key in oldest_keys:
-            del scan_results[key]
+    with results_lock:
+        scan_results[scan_key]['status'] = 'completed'
+
+        # Keep only the latest 10 results
+        if len(scan_results) > 10:
+            oldest_keys = sorted(scan_results, key=lambda k: scan_results[k]['timestamp'])[:-10]
+            for key in oldest_keys:
+                del scan_results[key]
 
 @app.route('/results', methods=['GET'])
 def get_results():
-    return jsonify(list(scan_results.values()))
+    with results_lock:
+        return jsonify(list(scan_results.values()))
 
 @app.route('/results/<scan_key>', methods=['GET'])
 def get_result_by_key(scan_key):
-    if scan_key in scan_results:
-        return jsonify(scan_results[scan_key])
-    else:
-        return jsonify({'error': 'Scan not found'}), 404
+    with results_lock:
+        if scan_key in scan_results:
+            return jsonify(scan_results[scan_key])
+        else:
+            return jsonify({'error': 'Scan not found'}), 404
 
 @app.route('/')
 def index():
